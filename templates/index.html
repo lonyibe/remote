@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head><title>File Manager</title></head>
+<body>
+  <h1>Simple File Manager</h1>
+
+  <form action="/upload" method="post" enctype="multipart/form-data">
+    <input type="file" name="file" required>
+    <button type="submit">Upload</button>
+  </form>
+
+  <ul>
+    {% for file in files %}
+      <li>
+        {{ file }}
+        <form action="/rename/{{ file }}" method="post" style="display:inline;">
+          <input type="text" name="new_name" placeholder="New name" required>
+          <button type="submit">Rename</button>
+        </form>
+        <a href="/delete/{{ file }}">Delete</a>
+      </li>
+    {% endfor %}
+  </ul>
+</body>
+</html>
