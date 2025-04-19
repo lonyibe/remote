@@ -28,32 +28,11 @@ def get_user_storage_used(uid):
     total = sum(file.get("size", 0) for file in files.values())
     return total
 
-@app.route("/")
-def index():
-    return render_template("index.html")
-
-@app.route("/signup", methods=["POST"])
-def signup():
-    email = request.json.get("email")
-    password = request.json.get("password")
-    try:
-        user = auth.create_user(email=email, password=password)
-        return jsonify({"status": "success", "uid": user.uid}), 200
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 400
-
-@app.route("/login", methods=["POST"])
-def login():
-    email = request.json.get("email")
-    password = request.json.get("password")
-    return jsonify({"status": "success", "message": "Client should handle Firebase login using JS SDK"}), 200
-
 @app.route("/upload", methods=["POST"])
 def upload_file():
     token = request.headers.get("Authorization")
     if not token:
         return jsonify({"error": "Missing token"}), 401
-    token = token.split(" ")[1]  # Extract token after "Bearer"
     try:
         decoded_token = auth.verify_id_token(token)
         uid = decoded_token["uid"]
@@ -99,7 +78,6 @@ def list_files():
     token = request.headers.get("Authorization")
     if not token:
         return jsonify({"error": "Missing token"}), 401
-    token = token.split(" ")[1]  # Extract token after "Bearer"
     try:
         decoded_token = auth.verify_id_token(token)
         uid = decoded_token["uid"]

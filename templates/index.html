@@ -8,19 +8,19 @@
 
 <div class="container py-4">
     <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap">
-        <h3>Welcome, {{ email }}</h3>
-        <a href="/logout" class="btn btn-danger">Logout</a>
+        <h3>Welcome</h3>
+        <button onclick="logout()" class="btn btn-danger">Logout</button>
     </div>
 
-    <form id="uploadForm" enctype="multipart/form-data" class="mb-4">
+    <form id="uploadForm" enctype="multipart/form-data" method="POST">
         <div class="input-group">
-            <input type="file" id="fileInput" class="form-control">
+            <input type="file" id="fileInput" name="file" class="form-control">
             <button type="submit" class="btn btn-primary">Upload</button>
         </div>
     </form>
 
     <div class="mb-3">
-        <strong>Used:</strong> <span id="used"></span> MB / 300 MB
+        <strong>Used: </strong><span id="used"></span> MB / 300 MB
         <div class="progress">
             <div id="progressBar" class="progress-bar" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="300">
                 0 MB
@@ -28,54 +28,44 @@
         </div>
     </div>
 
-    <div class="row g-3" id="filesContainer">
-        <!-- Files will be dynamically listed here -->
+    <div id="filesContainer">
+        <!-- Files will appear here -->
     </div>
 </div>
 
 <script>
-    const token = localStorage.getItem('firebase_token'); // Assuming the token is stored in localStorage
+    // Assuming you stored the Firebase token in localStorage
+    const token = localStorage.getItem('firebase_token'); 
 
     if (!token) {
-        window.location.href = '/login'; // Redirect to login page if no token
+        window.location.href = '/login'; // Redirect to login if no token
     }
 
-    // Get user data and files
+    // Load user's files and storage usage
     async function loadUserData() {
         try {
             const res = await fetch('/files', {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
+                headers: { 'Authorization': `Bearer ${token}` }
             });
-
             const data = await res.json();
-            if (data.error) {
-                alert(data.error);
-                return;
-            }
 
-            const used = data.storage_used / (1024 * 1024);  // Convert bytes to MB
-            const remaining = data.storage_remaining / (1024 * 1024);  // Convert bytes to MB
+            const used = data.storage_used / (1024 * 1024); // Convert to MB
+            const remaining = data.storage_remaining / (1024 * 1024); // Convert to MB
 
             document.getElementById('used').innerText = used.toFixed(2);
             document.getElementById('progressBar').style.width = (used / 300) * 100 + '%';
             document.getElementById('progressBar').innerText = `${used.toFixed(2)} MB`;
 
+            // Display files
             const filesContainer = document.getElementById('filesContainer');
             filesContainer.innerHTML = '';
-
             data.files.forEach(file => {
                 const fileCard = document.createElement('div');
-                fileCard.classList.add('col-md-6', 'col-lg-4');
+                fileCard.classList.add('card', 'mb-2');
                 fileCard.innerHTML = `
-                    <div class="card h-100 shadow-sm">
-                        <div class="card-body d-flex flex-column">
-                            <h6 class="card-title text-truncate">${file.name}</h6>
-                            <a href="${file.url}" class="btn btn-sm btn-success mb-2" download>Download</a>
-                            <button class="btn btn-sm btn-outline-secondary mb-2" onclick="copyLink('${file.id}')">Copy Share Link</button>
-                            <a href="/delete/${file.id}" class="btn btn-sm btn-danger">Delete</a>
-                        </div>
+                    <div class="card-body">
+                        <h6>${file.name}</h6>
+                        <a href="${file.url}" class="btn btn-success" download>Download</a>
                     </div>
                 `;
                 filesContainer.appendChild(fileCard);
@@ -97,9 +87,7 @@
         try {
             const res = await fetch('/upload', {
                 method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                },
+                headers: { 'Authorization': `Bearer ${token}` },
                 body: formData
             });
 
@@ -110,17 +98,15 @@
             }
 
             alert('File uploaded successfully');
-            loadUserData(); // Reload the file list after upload
+            loadUserData(); // Reload the file list
         } catch (err) {
             console.error('Error uploading file:', err);
         }
     });
 
-    function copyLink(fileId) {
-        const link = `${window.location.origin}/download/${fileId}`;
-        navigator.clipboard.writeText(link).then(() => {
-            alert("Link copied to clipboard!");
-        });
+    function logout() {
+        localStorage.removeItem('firebase_token');
+        window.location.href = '/login'; // Redirect to login page
     }
 </script>
 
