@@ -31,6 +31,7 @@ def get_user_storage_used(uid):
 
 # Route for displaying the index page (home page after login)
 @app.route("/")
+
 def index():
     user_email = session.get("user_email")
     if user_email:
