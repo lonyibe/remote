@@ -9,7 +9,7 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 import firebase_admin
-from firebase_admin import credentials, auth, db
+from firebase_admin import credentials, auth, db, exceptions as fb_exceptions
 
 app = Flask(__name__)
 
@@ -29,8 +29,11 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 
 def get_user_storage_used(uid):
-    ref   = db.reference(f"users/{uid}/files")
-    files = ref.get() or {}
+    ref = db.reference(f"users/{uid}/files")
+    try:
+        files = ref.get() or {}
+    except fb_exceptions.NotFoundError:
+        files = {}
     return sum(f.get("size", 0) for f in files.values())
 
 
@@ -62,7 +65,13 @@ def get_user_files():
 
         used = get_user_storage_used(uid)
         remaining = (300 * 1024 * 1024) - used
-        raw = db.reference(f"users/{uid}/files").get() or {}
+
+        # Safely fetch file list
+        ref = db.reference(f"users/{uid}/files")
+        try:
+            raw = ref.get() or {}
+        except fb_exceptions.NotFoundError:
+            raw = {}
 
         files = [
             {"name": f["name"], "url": f["url"], "size": f["size"]}
@@ -73,7 +82,8 @@ def get_user_files():
             storage_remaining=remaining,
             files=files
         )
-    except Exception as e:
+
+    except Exception:
         app.logger.error("Error in /files", exc_info=True)
         return jsonify(error="Internal server error fetching files"), 500
 
@@ -117,11 +127,13 @@ def upload_file():
             "share_url":    share_url,
             "uploaded_at":  datetime.datetime.utcnow().isoformat()
         }
+
+        # Write metadata (path will be created if missing)
         db.reference(f"users/{uid}/files/{file_id}").set(meta)
 
         return jsonify(message="File uploaded", file=meta), 200
 
-    except Exception as e:
+    except Exception:
         app.logger.error("Error in /upload", exc_info=True)
         return jsonify(error="Internal server error uploading file"), 500
 
