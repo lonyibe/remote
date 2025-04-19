@@ -17,6 +17,8 @@
       box-shadow: 0 10px 25px rgba(0,0,0,0.3);
     }
     .btn-success { background-color: #00b894; border: none; }
+    /* Ensure spinner is vertically aligned */
+    .btn .spinner-border { vertical-align: middle; }
   </style>
 </head>
 <body>
@@ -32,7 +34,10 @@
       <input id="password" type="password" class="form-control" placeholder="••••••••" required/>
     </div>
     <div class="d-grid gap-2 mb-3">
-      <button class="btn btn-success" onclick="signUp()">Sign Up</button>
+       <button id="signupButton" class="btn btn-success" onclick="signUp()">
+          <span id="signupSpinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+          <span id="signupButtonText">Sign Up</span>
+        </button>
     </div>
     <p class="text-center mb-0">
       Already have an account?
@@ -59,18 +64,34 @@
     const app = initializeApp(firebaseConfig);
     const auth = getAuth(app);
 
+    // Get button and spinner elements
+    const signupButton = document.getElementById("signupButton");
+    const signupSpinner = document.getElementById("signupSpinner");
+    const signupButtonText = document.getElementById("signupButtonText");
+    const statusEl = document.getElementById("status");
+
     window.signUp = async () => {
-      const statusEl = document.getElementById("status");
-      statusEl.textContent = "";
+      statusEl.textContent = ""; // Clear previous errors
       const email = document.getElementById("email").value;
       const password = document.getElementById("password").value;
+
+      // --- Show spinner and disable button ---
+      signupButton.disabled = true;
+      signupSpinner.classList.remove("d-none");
+      signupButtonText.textContent = "Signing Up..."; // Optional: change text
+
       try {
         const cred = await createUserWithEmailAndPassword(auth, email, password);
         const token = await cred.user.getIdToken();
         localStorage.setItem("firebase_token", token);
+        // No need to hide spinner here, redirect happens
         window.location.href = "/";
       } catch (err) {
         statusEl.textContent = err.message;
+        // --- Hide spinner and re-enable button on error ---
+        signupButton.disabled = false;
+        signupSpinner.classList.add("d-none");
+        signupButtonText.textContent = "Sign Up"; // Restore original text
       }
     };
   </script>

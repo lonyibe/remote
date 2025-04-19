@@ -17,6 +17,8 @@
       box-shadow: 0 10px 25px rgba(0,0,0,0.3);
     }
     .btn-primary { background-color: #6c5ce7; border: none; }
+    /* Ensure spinner is vertically aligned */
+    .btn .spinner-border { vertical-align: middle; }
   </style>
 </head>
 <body>
@@ -32,7 +34,10 @@
       <input id="password" type="password" class="form-control" placeholder="••••••••" required/>
     </div>
     <div class="d-grid gap-2 mb-3">
-      <button class="btn btn-primary" onclick="login()">Login</button>
+      <button id="loginButton" class="btn btn-primary" onclick="login()">
+        <span id="loginSpinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+        <span id="loginButtonText">Login</span>
+      </button>
     </div>
     <p class="text-center mb-0">
       Don't have an account?
@@ -59,18 +64,36 @@
     const app = initializeApp(firebaseConfig);
     const auth = getAuth(app);
 
+    // Get button and spinner elements
+    const loginButton = document.getElementById("loginButton");
+    const loginSpinner = document.getElementById("loginSpinner");
+    const loginButtonText = document.getElementById("loginButtonText");
+    const statusEl = document.getElementById("status");
+
+
     window.login = async () => {
-      const statusEl = document.getElementById("status");
-      statusEl.textContent = "";
+      statusEl.textContent = ""; // Clear previous errors
       const email = document.getElementById("email").value;
       const password = document.getElementById("password").value;
+
+      // --- Show spinner and disable button ---
+      loginButton.disabled = true;
+      loginSpinner.classList.remove("d-none");
+      loginButtonText.textContent = "Logging in..."; // Optional: change text
+
+
       try {
         const cred = await signInWithEmailAndPassword(auth, email, password);
         const token = await cred.user.getIdToken();
         localStorage.setItem("firebase_token", token);
+        // No need to hide spinner here, redirect happens
         window.location.href = "/";
       } catch (err) {
         statusEl.textContent = err.message;
+        // --- Hide spinner and re-enable button on error ---
+        loginButton.disabled = false;
+        loginSpinner.classList.add("d-none");
+        loginButtonText.textContent = "Login"; // Restore original text
       }
     };
   </script>
