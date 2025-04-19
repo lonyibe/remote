@@ -1,6 +1,4 @@
- Flask
-Flask-Cors
-gunicorn
-Flask-Cors
-gunicorn
+Flask
 firebase-admin
+gunicorn
+Werkzeug
