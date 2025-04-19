@@ -1,102 +1,81 @@
-from flask import Flask, render_template, request, redirect, url_for, send_from_directory, session, jsonify
-from werkzeug.utils import secure_filename
+from flask import Flask, render_template, request, redirect, url_for, session, flash
+from firebase_admin import credentials, initialize_app, auth, storage
+import firebase_admin
 import os
-from flask_cors import CORS
-from functools import wraps
 
+# Initialize Flask app
 app = Flask(__name__)
-app.secret_key = 'supersecretkey'
-CORS(app)
+app.secret_key = "your_secret_key_here"  # Required for session management
 
-UPLOAD_FOLDER = 'uploads'
-MAX_STORAGE_MB = 300
+# Initialize Firebase Admin SDK
+cred = credentials.Certificate("path/to/your/firebase-admin-sdk.json")
+firebase_admin.initialize_app(cred, {'storageBucket': 'your-app-id.appspot.com'})
 
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
-
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-
-# Check login
-def login_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if 'user_email' not in session:
-            return redirect(url_for('login'))
-        return f(*args, **kwargs)
-    return decorated
-
-def get_user_folder():
-    return os.path.join(app.config['UPLOAD_FOLDER'], session['user_email'])
-
-def get_storage_usage_mb():
-    total_size = 0
-    user_folder = get_user_folder()
-    if os.path.exists(user_folder):
-        for f in os.listdir(user_folder):
-            fp = os.path.join(user_folder, f)
-            if os.path.isfile(fp):
-                total_size += os.path.getsize(fp)
-    return round(total_size / (1024 * 1024), 2)
-
+# Routes
 @app.route('/')
-@login_required
 def index():
-    user_folder = get_user_folder()
-    if not os.path.exists(user_folder):
-        os.makedirs(user_folder)
-    files = os.listdir(user_folder)
-    used = get_storage_usage_mb()
-    remaining = MAX_STORAGE_MB - used
-    return render_template('index.html', files=files, used=used, remaining=remaining, email=session['user_email'])
+    if 'user' not in session:
+        return redirect(url_for('login'))
+    
+    # Calculate the used storage (You can fetch this from Firebase Storage or another method)
+    used_storage = 0  # Dummy value, update with actual usage logic
+    total_storage = 300  # 300MB
 
-@app.route('/upload', methods=['POST'])
-@login_required
-def upload():
-    if 'file' not in request.files:
-        return redirect('/')
-    file = request.files['file']
-    if file.filename == '':
-        return redirect('/')
-    filename = secure_filename(file.filename)
-    user_folder = get_user_folder()
+    # Calculate remaining storage
+    remaining_storage = total_storage - used_storage
 
-    if not os.path.exists(user_folder):
-        os.makedirs(user_folder)
+    return render_template('index.html', used_storage=used_storage, remaining_storage=remaining_storage)
 
-    # Check size limit
-    if get_storage_usage_mb() + (len(file.read()) / (1024 * 1024)) > MAX_STORAGE_MB:
-        return 'Storage limit exceeded!', 403
-    file.seek(0)  # Reset after read
-    file.save(os.path.join(user_folder, filename))
-    return redirect('/')
-
-@app.route('/delete/<filename>')
-@login_required
-def delete(filename):
-    file_path = os.path.join(get_user_folder(), filename)
-    if os.path.exists(file_path):
-        os.remove(file_path)
-    return redirect('/')
-
-@app.route('/download/<email>/<filename>')
-def download(email, filename):
-    return send_from_directory(os.path.join(UPLOAD_FOLDER, email), filename, as_attachment=True)
-
-@app.route('/login')
+@app.route('/login', methods=['GET', 'POST'])
 def login():
+    if request.method == 'POST':
+        email = request.form['email']
+        password = request.form['password']
+        try:
+            user = auth.get_user_by_email(email)
+            # Assuming password verification is handled by Firebase
+            session['user'] = user.uid
+            return redirect(url_for('index'))
+        except Exception as e:
+            flash("Login failed: " + str(e), "error")
     return render_template('login.html')
 
-@app.route('/setuser', methods=['POST'])
-def setuser():
-    data = request.get_json()
-    session['user_email'] = data['email']
-    return jsonify({'status': 'ok'})
+@app.route('/signup', methods=['GET', 'POST'])
+def signup():
+    if request.method == 'POST':
+        email = request.form['email']
+        password = request.form['password']
+        try:
+            user = auth.create_user(email=email, password=password)
+            session['user'] = user.uid
+            return redirect(url_for('index'))
+        except Exception as e:
+            flash("Signup failed: " + str(e), "error")
+    return render_template('signup.html')
 
-@app.route('/logout')
-def logout():
-    session.pop('user_email', None)
-    return redirect('/login')
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    if 'user' not in session:
+        return redirect(url_for('login'))
 
-# Run the app
-if __name__ == "__main__":
+    file = request.files['file']
+    if file:
+        # Check the file size (dummy check, you can add validation logic here)
+        file_size = len(file.read()) / (1024 * 1024)  # in MB
+        if file_size > 300:
+            flash("File is too large, please upload files smaller than 300MB.", "error")
+            return redirect(url_for('index'))
+
+        # Save the file to Firebase Storage
+        bucket = storage.bucket()
+        blob = bucket.blob(file.filename)
+        blob.upload_from_file(file)
+
+        flash("File uploaded successfully!", "success")
+        return redirect(url_for('index'))
+
+    flash("No file selected.", "error")
+    return redirect(url_for('index'))
+
+if __name__ == '__main__':
     app.run(debug=True, host="0.0.0.0", port=5000)
