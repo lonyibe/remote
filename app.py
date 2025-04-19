@@ -1,140 +1,127 @@
 import os
-import base64
-import requests
-from flask import Flask, render_template, request, jsonify, redirect, url_for, session, send_file
+import json
+import uuid
+import datetime
+from flask import Flask, request, jsonify, send_from_directory, render_template, redirect, url_for
 from werkzeug.utils import secure_filename
-from firebase_admin import credentials, initialize_app, auth, db
-from io import BytesIO
+import firebase_admin
+from firebase_admin import credentials, auth, db
 
-# Initialize Flask app
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
+app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['MAX_CONTENT_LENGTH'] = 300 * 1024 * 1024  # 300MB
 
-# Firebase Admin SDK initialization
-cred = credentials.Certificate("firebase_key.json")
-initialize_app(cred, {
-    "databaseURL": "https://storage-9f5d9-default-rtdb.firebaseio.com/"
+# Initialize Firebase using credentials from environment variable
+firebase_key_json = json.loads(os.environ["FIREBASE_KEY"])
+cred = credentials.Certificate(firebase_key_json)
+firebase_admin.initialize_app(cred, {
+    'databaseURL': os.environ.get('FIREBASE_DB_URL')  # make sure to set this in Render too
 })
 
-# Constants
-MAX_STORAGE_MB = 300
-IMGUR_CLIENT_ID = os.getenv("IMGUR_CLIENT_ID")
+# Ensure upload folder exists
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+# Utility function to get total used space by a user
+def get_user_storage_used(uid):
+    ref = db.reference(f"users/{uid}/files")
+    files = ref.get() or {}
+    total = sum(file.get("size", 0) for file in files.values())
+    return total
 
 @app.route("/")
 def index():
-    if "user" in session:
-        return redirect(url_for("dashboard"))
     return render_template("index.html")
 
-@app.route("/signup")
+@app.route("/signup", methods=["POST"])
 def signup():
-    return render_template("signup.html")
-
-@app.route("/login")
-def login():
-    return render_template("login.html")
-
-@app.route("/logout")
-def logout():
-    session.pop("user", None)
-    return redirect(url_for("index"))
-
-@app.route("/setuser", methods=["POST"])
-def set_user():
-    data = request.get_json()
-    email = data.get("email")
-    uid = data.get("uid")
-
-    if not email or not uid:
-        return jsonify({"error": "Email and UID are required"}), 400
-
+    email = request.json.get("email")
+    password = request.json.get("password")
     try:
-        user_ref = db.reference("users").child(uid)
-        user_ref.set({"email": email})
-        return jsonify({"message": "User saved successfully"}), 200
+        user = auth.create_user(email=email, password=password)
+        return jsonify({"status": "success", "uid": user.uid}), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"status": "error", "message": str(e)}), 400
 
-@app.route("/session", methods=["POST"])
-def set_session():
-    data = request.get_json()
-    session["user"] = data
-    return jsonify({"message": "Session set"}), 200
-
-@app.route("/dashboard")
-def dashboard():
-    if "user" not in session:
-        return redirect(url_for("login"))
-
-    uid = session["user"]["uid"]
-    files_ref = db.reference("files").child(uid)
-    files = files_ref.get() or {}
-
-    total_size = sum(file["size"] for file in files.values())
-    remaining = MAX_STORAGE_MB * 1024 * 1024 - total_size
-
-    return render_template("dashboard.html", files=files, used=total_size, remaining=remaining)
+@app.route("/login", methods=["POST"])
+def login():
+    email = request.json.get("email")
+    password = request.json.get("password")
+    return jsonify({"status": "success", "message": "Client should handle Firebase login using JS SDK"}), 200
 
 @app.route("/upload", methods=["POST"])
-def upload():
-    if "user" not in session:
-        return redirect(url_for("login"))
+def upload_file():
+    token = request.headers.get("Authorization")
+    if not token:
+        return jsonify({"error": "Missing token"}), 401
+    try:
+        decoded_token = auth.verify_id_token(token)
+        uid = decoded_token["uid"]
+    except Exception:
+        return jsonify({"error": "Invalid token"}), 401
 
-    file = request.files["file"]
-    if not file:
-        return "No file uploaded", 400
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
 
-    uid = session["user"]["uid"]
-    files_ref = db.reference("files").child(uid)
-    files = files_ref.get() or {}
+    filename = secure_filename(file.filename)
+    file_id = str(uuid.uuid4())
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], file_id + "_" + filename)
+    file.save(filepath)
 
-    total_size = sum(f["size"] for f in files.values())
-    if total_size + len(file.read()) > MAX_STORAGE_MB * 1024 * 1024:
-        return "Storage limit exceeded", 400
-    file.seek(0)
+    filesize = os.path.getsize(filepath)
+    used = get_user_storage_used(uid)
+    if used + filesize > 300 * 1024 * 1024:
+        os.remove(filepath)
+        return jsonify({"error": "Storage limit exceeded"}), 400
 
-    headers = {"Authorization": f"Client-ID {IMGUR_CLIENT_ID}"}
-    encoded_image = base64.b64encode(file.read()).decode("utf-8")
-    data = {"image": encoded_image, "type": "base64", "name": secure_filename(file.filename)}
+    file_url = url_for("download_file", filename=file_id + "_" + filename, _external=True)
+    share_url = url_for("share_file", file_id=file_id + "_" + filename, _external=True)
 
-    res = requests.post("https://api.imgur.com/3/image", headers=headers, data=data)
-    if res.status_code != 200:
-        return "Imgur upload failed", 500
-
-    file_url = res.json()["data"]["link"]
-    file_size = res.json()["data"]["size"]
-
-    files_ref.child(secure_filename(file.filename)).set({
+    file_meta = {
+        "id": file_id,
+        "name": filename,
+        "size": filesize,
         "url": file_url,
-        "size": file_size
+        "share_url": share_url,
+        "uploaded_at": datetime.datetime.now().isoformat()
+    }
+
+    ref = db.reference(f"users/{uid}/files/{file_id}")
+    ref.set(file_meta)
+
+    return jsonify({"message": "File uploaded successfully", "file": file_meta}), 200
+
+@app.route("/files", methods=["GET"])
+def list_files():
+    token = request.headers.get("Authorization")
+    if not token:
+        return jsonify({"error": "Missing token"}), 401
+    try:
+        decoded_token = auth.verify_id_token(token)
+        uid = decoded_token["uid"]
+    except Exception:
+        return jsonify({"error": "Invalid token"}), 401
+
+    ref = db.reference(f"users/{uid}/files")
+    files = ref.get() or {}
+
+    total_used = get_user_storage_used(uid)
+    total_free = 300 * 1024 * 1024 - total_used
+    return jsonify({
+        "files": list(files.values()),
+        "storage_used": total_used,
+        "storage_remaining": total_free
     })
 
-    return redirect(url_for("dashboard"))
-
 @app.route("/download/<filename>")
-def download(filename):
-    if "user" not in session:
-        return redirect(url_for("login"))
+def download_file(filename):
+    return send_from_directory(app.config["UPLOAD_FOLDER"], filename, as_attachment=True)
 
-    uid = session["user"]["uid"]
-    file_ref = db.reference("files").child(uid).child(filename)
-    file_data = file_ref.get()
-
-    if not file_data:
-        return "File not found", 404
-
-    file_url = file_data["url"]
-    res = requests.get(file_url)
-    return send_file(BytesIO(res.content), as_attachment=True, download_name=filename)
-
-@app.route("/delete/<filename>")
-def delete_file(filename):
-    if "user" not in session:
-        return redirect(url_for("login"))
-
-    uid = session["user"]["uid"]
-    db.reference("files").child(uid).child(filename).delete()
-    return redirect(url_for("dashboard"))
+@app.route("/share/<file_id>")
+def share_file(file_id):
+    return redirect(url_for("download_file", filename=file_id))
 
 # Run the app
 if __name__ == "__main__":
