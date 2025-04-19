@@ -14,7 +14,7 @@ from firebase_admin import credentials, auth, db
 app = Flask(__name__)
 
 # 300 MB upload limit
-app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['UPLOAD_FOLDER']      = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 300 * 1024 * 1024
 
 # Initialize Firebase Admin from JSON in env var
@@ -29,7 +29,7 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 
 def get_user_storage_used(uid):
-    ref = db.reference(f"users/{uid}/files")
+    ref   = db.reference(f"users/{uid}/files")
     files = ref.get() or {}
     return sum(f.get("size", 0) for f in files.values())
 
@@ -51,81 +51,88 @@ def signup():
 
 @app.route("/files")
 def get_user_files():
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.lower().startswith("bearer "):
-        return jsonify(error="Missing token"), 401
-
-    token = auth_header.split()[1]
     try:
-        uid = auth.verify_id_token(token)["uid"]
-    except Exception:
-        return jsonify(error="Invalid token"), 401
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.lower().startswith("bearer "):
+            return jsonify(error="Missing or malformed Authorization header"), 401
 
-    used = get_user_storage_used(uid)
-    total = 300 * 1024 * 1024
-    remaining = total - used
-    raw = db.reference(f"users/{uid}/files").get() or {}
+        token = auth_header.split()[1]
+        decoded = auth.verify_id_token(token)
+        uid = decoded["uid"]
 
-    files = [
-        {"name": f["name"], "url": f["url"], "size": f["size"]}
-        for f in raw.values()
-    ]
-    return jsonify(
-        storage_used=used,
-        storage_remaining=remaining,
-        files=files
-    )
+        used = get_user_storage_used(uid)
+        remaining = (300 * 1024 * 1024) - used
+        raw = db.reference(f"users/{uid}/files").get() or {}
+
+        files = [
+            { "name": f["name"], "url": f["url"], "size": f["size"] }
+            for f in raw.values()
+        ]
+        return jsonify(
+            storage_used=used,
+            storage_remaining=remaining,
+            files=files
+        )
+    except Exception as e:
+        app.logger.error("Error in /files", exc_info=True)
+        return jsonify(error="Internal server error fetching files"), 500
 
 
 @app.route("/upload", methods=["POST"])
 def upload_file():
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.lower().startswith("bearer "):
-        return jsonify(error="Missing token"), 401
-
-    token = auth_header.split()[1]
     try:
-        uid = auth.verify_id_token(token)["uid"]
-    except Exception:
-        return jsonify(error="Invalid token"), 401
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.lower().startswith("bearer "):
+            return jsonify(error="Missing or malformed Authorization header"), 401
 
-    if 'file' not in request.files:
-        return jsonify(error="No file part"), 400
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify(error="No selected file"), 400
+        token = auth_header.split()[1]
+        decoded = auth.verify_id_token(token)
+        uid = decoded["uid"]
 
-    filename = secure_filename(file.filename)
-    file_id = str(uuid.uuid4())
-    saved_name = f"{file_id}_{filename}"
-    path = os.path.join(app.config['UPLOAD_FOLDER'], saved_name)
-    file.save(path)
+        if 'file' not in request.files:
+            return jsonify(error="No file part"), 400
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify(error="No selected file"), 400
 
-    size = os.path.getsize(path)
-    used = get_user_storage_used(uid)
-    if used + size > 300 * 1024 * 1024:
-        os.remove(path)
-        return jsonify(error="Storage limit exceeded"), 400
+        filename = secure_filename(file.filename)
+        file_id = str(uuid.uuid4())
+        saved_name = f"{file_id}_{filename}"
+        path = os.path.join(app.config['UPLOAD_FOLDER'], saved_name)
+        file.save(path)
 
-    download_url = url_for("download_file", filename=saved_name, _external=True)
-    share_url = url_for("share_file", file_id=saved_name, _external=True)
+        size = os.path.getsize(path)
+        used = get_user_storage_used(uid)
+        if used + size > 300 * 1024 * 1024:
+            os.remove(path)
+            return jsonify(error="Storage limit exceeded"), 400
 
-    meta = {
-        "id": file_id,
-        "name": filename,
-        "size": size,
-        "url": download_url,
-        "share_url": share_url,
-        "uploaded_at": datetime.datetime.utcnow().isoformat()
-    }
-    db.reference(f"users/{uid}/files/{file_id}").set(meta)
+        download_url = url_for("download_file", filename=saved_name, _external=True)
+        share_url    = url_for("share_file", file_id=saved_name, _external=True)
+        meta = {
+            "id": file_id,
+            "name": filename,
+            "size": size,
+            "url": download_url,
+            "share_url": share_url,
+            "uploaded_at": datetime.datetime.utcnow().isoformat()
+        }
+        db.reference(f"users/{uid}/files/{file_id}").set(meta)
 
-    return jsonify(message="File uploaded", file=meta), 200
+        return jsonify(message="File uploaded", file=meta), 200
+
+    except Exception as e:
+        app.logger.error("Error in /upload", exc_info=True)
+        return jsonify(error="Internal server error uploading file"), 500
 
 
 @app.route("/download/<filename>")
 def download_file(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename, as_attachment=True)
+    return send_from_directory(
+        app.config['UPLOAD_FOLDER'],
+        filename,
+        as_attachment=True
+    )
 
 
 @app.route("/share/<file_id>")
