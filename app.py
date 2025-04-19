@@ -1,128 +1,131 @@
 import os
-import json
-from functools import wraps
-from flask import (
-    Flask, render_template, request, redirect, url_for,
-    session, flash, jsonify
-)
-from firebase_admin import credentials, initialize_app, auth, storage
+import io
+import base64
+import requests
+from flask import Flask, render_template, request, redirect, session, url_for, jsonify
 from werkzeug.utils import secure_filename
+import firebase_admin
+from firebase_admin import credentials, auth, db
+from functools import wraps
+from dotenv import load_dotenv
 
-# ——— Flask setup ———
+load_dotenv()
+
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "supersecret")
+app.secret_key = os.urandom(24)
 
-# ——— Firebase Admin init from ENV VAR ———
-sa_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
-if not sa_json:
-    raise RuntimeError("Missing FIREBASE_SERVICE_ACCOUNT_JSON env var")
-sa_info = json.loads(sa_json)
+# Firebase Setup
+cred = credentials.Certificate("firebase-admin.json")
+firebase_admin.initialize_app(cred, {
+    'databaseURL': os.environ.get("FIREBASE_DB_URL")
+})
 
-bucket_name = os.getenv("FIREBASE_STORAGE_BUCKET")
-if not bucket_name:
-    raise RuntimeError("Missing FIREBASE_STORAGE_BUCKET env var")
+IMGUR_CLIENT_ID = os.environ.get("IMGUR_CLIENT_ID")
+MAX_STORAGE_BYTES = 300 * 1024 * 1024  # 300MB
 
-cred = credentials.Certificate(sa_info)
-firebase_app = initialize_app(cred, {"storageBucket": bucket_name})
-bucket = storage.bucket(app=firebase_app)
-
-# ——— Constants ———
-UPLOAD_LIMIT_MB = 300
-
-# ——— Helpers ———
+# Auth Decorator
 def login_required(f):
     @wraps(f)
     def wrapped(*args, **kwargs):
-        if "user_email" not in session:
+        if "user" not in session:
             return redirect(url_for("login"))
         return f(*args, **kwargs)
     return wrapped
 
-# ——— Routes ———
-@app.route("/setuser", methods=["POST"])
-def setuser():
-    data = request.get_json()
-    session["user_email"] = data.get("email")
-    return jsonify({"status": "ok"})
-
 @app.route("/")
 @login_required
 def index():
-    prefix = session["user_email"] + "/"
-    blobs = list(bucket.list_blobs(prefix=prefix))
-    files = [b.name.split("/",1)[1] for b in blobs if b.name != prefix]
-    total_bytes = sum(b.size for b in blobs)
-    used_mb = round(total_bytes / (1024*1024), 2)
-    remaining_mb = max(0, UPLOAD_LIMIT_MB - used_mb)
-    return render_template(
-        "index.html",
-        email=session["user_email"],
-        files=files,
-        used_mb=used_mb,
-        remaining_mb=remaining_mb
-    )
+    user_email = session["user"]
+    ref = db.reference(f"users/{user_email.replace('.', '_')}/files")
+    files = ref.get() or {}
 
-@app.route("/login", methods=["GET"])
-def login():
-    return render_template("login.html")
+    total_size = sum(file['size'] for file in files.values())
+    remaining = MAX_STORAGE_BYTES - total_size
 
-@app.route("/signup", methods=["GET"])
-def signup():
-    return render_template("signup.html")
-
-@app.route("/logout")
-def logout():
-    session.pop("user_email", None)
-    return redirect(url_for("login"))
+    return render_template("index.html", files=files, used=total_size, remaining=remaining)
 
 @app.route("/upload", methods=["POST"])
 @login_required
 def upload():
-    file = request.files.get("file")
-    if not file or file.filename == "":
-        flash("No file selected", "warning")
-        return redirect(url_for("index"))
-
-    data = file.read()
-    size_mb = len(data) / (1024*1024)
-    file.stream.seek(0)
-
-    prefix = session["user_email"] + "/"
-    existing_bytes = sum(b.size for b in bucket.list_blobs(prefix=prefix))
-    if (existing_bytes + len(data)) > UPLOAD_LIMIT_MB * 1024*1024:
-        flash(f"Upload would exceed your {UPLOAD_LIMIT_MB} MB limit", "danger")
-        return redirect(url_for("index"))
+    file = request.files["file"]
+    if not file:
+        return "No file selected", 400
 
     filename = secure_filename(file.filename)
-    blob = bucket.blob(f"{prefix}{filename}")
-    blob.upload_from_file(file.stream, content_type=file.mimetype)
-    flash("File uploaded!", "success")
-    return redirect(url_for("index"))
+    file_bytes = file.read()
 
-@app.route("/delete/<filename>")
-@login_required
-def delete(filename):
-    blob = bucket.blob(f"{session['user_email']}/{filename}")
-    if blob.exists():
-        blob.delete()
-        flash("Deleted "+filename, "info")
-    return redirect(url_for("index"))
+    # Size Check
+    user_email = session["user"]
+    ref = db.reference(f"users/{user_email.replace('.', '_')}/files")
+    files = ref.get() or {}
+    total_size = sum(f["size"] for f in files.values())
 
-@app.route("/download/<filename>")
-@login_required
-def download(filename):
-    blob = bucket.blob(f"{session['user_email']}/{filename}")
-    url = blob.generate_signed_url(
-        version="v4",
-        expiration=3600,
-        response_disposition=f"attachment; filename={filename}"
+    if total_size + len(file_bytes) > MAX_STORAGE_BYTES:
+        return "Upload exceeds 300MB quota.", 403
+
+    # Upload to Imgur
+    imgur_response = requests.post(
+        "https://api.imgur.com/3/upload",
+        headers={"Authorization": f"Client-ID {IMGUR_CLIENT_ID}"},
+        data={
+            "image": base64.b64encode(file_bytes),
+            "type": "base64",
+            "name": filename,
+            "title": filename
+        }
     )
-    return redirect(url)
 
-# ——— Run ———
+    imgur_data = imgur_response.json()
+    if not imgur_data.get("success"):
+        return "Imgur upload failed", 500
+
+    file_url = imgur_data["data"]["link"]
+    ref.child(filename).set({
+        "name": filename,
+        "url": file_url,
+        "size": len(file_bytes)
+    })
+
+    return redirect(url_for("index"))
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        email = request.form["email"]
+        password = request.form["password"]
+        try:
+            user = auth.get_user_by_email(email)
+            session["user"] = email
+            return redirect(url_for("index"))
+        except Exception as e:
+            return render_template("login.html", error="Login failed")
+    return render_template("login.html")
+
+@app.route("/signup", methods=["GET", "POST"])
+def signup():
+    if request.method == "POST":
+        email = request.form["email"]
+        password = request.form["password"]
+        try:
+            auth.create_user(email=email, password=password)
+            return redirect(url_for("login"))
+        except Exception as e:
+            return render_template("signup.html", error="Signup failed")
+    return render_template("signup.html")
+
+@app.route("/logout")
+def logout():
+    session.pop("user", None)
+    return redirect(url_for("login"))
+
+@app.route("/delete/<filename>", methods=["POST"])
+@login_required
+def delete_file(filename):
+    user_email = session["user"]
+    ref = db.reference(f"users/{user_email.replace('.', '_')}/files/{filename}")
+    ref.delete()
+    return redirect(url_for("index"))
+
+# Run the app
 if __name__ == "__main__":
-    app.run(
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", 5000)),
-        debug=True
-    )
+    app.run(debug=True, host="0.0.0.0", port=5000)
