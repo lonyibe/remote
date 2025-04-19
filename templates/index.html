@@ -12,6 +12,7 @@
         <a href="/logout" class="btn btn-danger">Logout</a>
     </div>
 
+    <!-- File upload form -->
     <form method="post" action="/upload" enctype="multipart/form-data" class="mb-4">
         <div class="input-group">
             <input type="file" name="file" class="form-control">
@@ -19,6 +20,7 @@
         </div>
     </form>
 
+    <!-- Storage usage -->
     <div class="mb-3">
         <strong>Used:</strong> {{ used }} MB / 300 MB
         <div class="progress">
@@ -28,15 +30,16 @@
         </div>
     </div>
 
+    <!-- Display uploaded files -->
     <div class="row g-3">
         {% for file in files %}
         <div class="col-md-6 col-lg-4">
             <div class="card h-100 shadow-sm">
                 <div class="card-body d-flex flex-column">
-                    <h6 class="card-title text-truncate">{{ file }}</h6>
-                    <a href="/download/{{ email }}/{{ file }}" class="btn btn-sm btn-success mb-2" download>Download</a>
-                    <button class="btn btn-sm btn-outline-secondary mb-2" onclick="copyLink('{{ file }}')">Copy Share Link</button>
-                    <a href="/delete/{{ file }}" class="btn btn-sm btn-danger">Delete</a>
+                    <h6 class="card-title text-truncate">{{ file.name }}</h6>
+                    <a href="{{ file.url }}" class="btn btn-sm btn-success mb-2" download>Download</a>
+                    <button class="btn btn-sm btn-outline-secondary mb-2" onclick="copyLink('{{ file.share_url }}')">Copy Share Link</button>
+                    <a href="/delete/{{ file.id }}" class="btn btn-sm btn-danger">Delete</a>
                 </div>
             </div>
         </div>
@@ -45,9 +48,9 @@
 </div>
 
 <script>
-    function copyLink(filename) {
-        const link = `${window.location.origin}/download/{{ email }}/${filename}`;
-        navigator.clipboard.writeText(link).then(() => {
+    // Function to copy the share link to clipboard
+    function copyLink(shareUrl) {
+        navigator.clipboard.writeText(shareUrl).then(() => {
             alert("Link copied to clipboard!");
         });
     }

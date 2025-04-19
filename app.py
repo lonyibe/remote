@@ -30,7 +30,19 @@ def get_user_storage_used(uid):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    token = request.args.get("token")
+    used = 0
+    email = ""
+    if token:
+        try:
+            decoded_token = auth.verify_id_token(token)
+            uid = decoded_token["uid"]
+            used = get_user_storage_used(uid) / (1024 * 1024)  # Convert to MB
+            user = auth.get_user(uid)
+            email = user.email
+        except Exception:
+            pass  # Handle invalid token gracefully
+    return render_template("index.html", email=email, used=round(used, 2))
 
 @app.route("/signup", methods=["POST"])
 def signup():
@@ -122,6 +134,29 @@ def download_file(filename):
 @app.route("/share/<file_id>")
 def share_file(file_id):
     return redirect(url_for("download_file", filename=file_id))
+
+@app.route("/delete/<file_id>")
+def delete_file(file_id):
+    token = request.headers.get("Authorization")
+    if not token:
+        return jsonify({"error": "Missing token"}), 401
+    try:
+        decoded_token = auth.verify_id_token(token)
+        uid = decoded_token["uid"]
+    except Exception:
+        return jsonify({"error": "Invalid token"}), 401
+
+    ref = db.reference(f"users/{uid}/files/{file_id}")
+    file_meta = ref.get()
+    if not file_meta:
+        return jsonify({"error": "File not found"}), 404
+
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], file_meta['id'] + "_" + file_meta['name'])
+    if os.path.exists(filepath):
+        os.remove(filepath)
+
+    ref.delete()
+    return jsonify({"message": "File deleted successfully"}), 200
 
 # Run the app
 if __name__ == "__main__":
