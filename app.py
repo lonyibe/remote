@@ -105,6 +105,11 @@ def delete_file():
         return jsonify({"message": "File deleted successfully."}), 200
     return jsonify({"error": "No file URL provided."}), 400
 
+# Route for the home page
+@app.route('/')
+def home():
+    return "Welcome to the File Manager API!"  # Basic welcome message to test the app
+
 # Run the app
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
