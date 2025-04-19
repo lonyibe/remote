@@ -1,6 +1,6 @@
+from flask import Flask, render_template, request, jsonify, redirect, url_for
 import os
 import json
-from flask import Flask, request, jsonify
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
 from dotenv import load_dotenv
@@ -58,6 +58,11 @@ def upload_to_firebase(file):
     blob.make_public()
     return blob.public_url
 
+# Route for serving the login page
+@app.route('/')
+def login():
+    return render_template('login.html')  # Serve the login.html file
+
 # Route for uploading files
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -105,11 +110,6 @@ def delete_file():
         return jsonify({"message": "File deleted successfully."}), 200
     return jsonify({"error": "No file URL provided."}), 400
 
-# Route for the home page
-@app.route('/')
-def home():
-    return "Welcome to the File Manager API!"  # Basic welcome message to test the app
-
 # Run the app
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(debug=True, host="0.0.0.0", port=5000)
