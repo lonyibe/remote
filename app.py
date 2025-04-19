@@ -31,7 +31,6 @@ def get_user_storage_used(uid):
 
 # Route for displaying the index page (home page after login)
 @app.route("/")
-
 def index():
     user_email = session.get("user_email")
     if user_email:
@@ -44,6 +43,24 @@ def index():
         return render_template("index.html", email=user_email, used=total_used / (1024 * 1024), files=files)
     else:
         return redirect(url_for("login"))  # Redirect to login if not logged in
+
+# Route for login page
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        email = request.form.get("email")
+        password = request.form.get("password")
+        
+        # Here, you should authenticate the user using Firebase authentication
+        try:
+            # Authenticate the user by email (you may want to verify password here too)
+            user = auth.get_user_by_email(email)  # This is a basic example
+            session["user_email"] = user.email  # Save the user's email to the session
+            return redirect(url_for("index"))  # Redirect to index after successful login
+        except auth.AuthError:
+            return "Invalid credentials", 400  # Return an error if authentication fails
+    
+    return render_template("login.html")  # Render login page for GET requests
 
 # Route for getting user's file data (used storage and files)
 @app.route("/files")
