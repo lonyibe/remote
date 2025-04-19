@@ -1,6 +1,6 @@
  Flask
--Flask-Cors
--gunicorn
-+Flask-Cors
-+gunicorn
-+firebase-admin
+Flask-Cors
+gunicorn
+Flask-Cors
+gunicorn
+firebase-admin
