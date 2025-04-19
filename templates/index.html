@@ -8,6 +8,22 @@
     href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
     rel="stylesheet"
   />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
+  <style>
+    .card-title {
+        /* Ensure title doesn't push buttons down too much */
+        margin-bottom: 0.5rem;
+    }
+    .card-buttons .btn {
+        margin-right: 5px; /* Spacing between buttons */
+    }
+    .copy-feedback {
+        font-size: 0.8em;
+        color: green;
+        display: none; /* Hidden by default */
+        margin-left: 5px;
+    }
+  </style>
 </head>
 <body class="bg-light">
 
@@ -17,6 +33,10 @@
       <button class="btn btn-danger" onclick="logout()">Logout</button>
     </div>
 
+    <div id="globalError" class="alert alert-danger d-none" role="alert"></div>
+    <div id="globalSuccess" class="alert alert-success d-none" role="alert"></div>
+
+
     <form id="uploadForm" enctype="multipart/form-data" class="mb-4">
       <div class="input-group">
         <input
@@ -24,117 +44,284 @@
           id="fileInput"
           name="file"
           class="form-control"
+          required
         />
-        <button type="submit" class="btn btn-primary">Upload</button>
+        <button type="submit" id="uploadButton" class="btn btn-primary">
+          <span id="uploadSpinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+          Upload
+        </button>
+      </div>
+       <div id="uploadProgress" class="progress mt-2 d-none" style="height: 5px;">
+        <div id="uploadProgressBar" class="progress-bar" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
       </div>
     </form>
 
     <div class="mb-3">
-      <strong>Used:</strong>
+      <strong>Storage Used:</strong>
       <span id="used">0.00</span> MB / 300 MB
       <div class="progress mt-2">
         <div
-          id="progressBar"
+          id="storageProgressBar"
           class="progress-bar"
           role="progressbar"
           style="width: 0%;"
           aria-valuemin="0"
           aria-valuemax="300"
-        >0 MB</div>
+        >0%</div>
       </div>
     </div>
 
-    <div id="filesContainer" class="row g-3"></div>
+    <h5>Your Files</h5>
+    <div id="filesContainer" class="row g-3">
+        <div id="loadingIndicator" class="text-center mt-5">
+            <div class="spinner-border" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p>Loading files...</p>
+        </div>
+    </div>
   </div>
 
   <script>
     const token = localStorage.getItem('firebase_token');
-    if (!token) window.location.href = '/login';
+    if (!token) window.location.href = '/login'; // Redirect if not logged in
+
+    const filesContainer = document.getElementById('filesContainer');
+    const loadingIndicator = document.getElementById('loadingIndicator');
+    const usedSpan = document.getElementById('used');
+    const storageProgressBar = document.getElementById('storageProgressBar');
+    const uploadForm = document.getElementById('uploadForm');
+    const fileInput = document.getElementById('fileInput');
+    const uploadButton = document.getElementById('uploadButton');
+    const uploadSpinner = document.getElementById('uploadSpinner');
+    const uploadProgress = document.getElementById('uploadProgress');
+    const uploadProgressBar = document.getElementById('uploadProgressBar');
+    const globalError = document.getElementById('globalError');
+    const globalSuccess = document.getElementById('globalSuccess');
+
+
+    function displayMessage(element, message, isError = true) {
+        element.textContent = message;
+        element.classList.remove('d-none');
+        element.classList.toggle('alert-danger', isError);
+        element.classList.toggle('alert-success', !isError);
+        // Auto-hide after 5 seconds
+        setTimeout(() => {
+            element.classList.add('d-none');
+        }, 5000);
+    }
+
+    function formatBytes(bytes, decimals = 2) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const dm = decimals < 0 ? 0 : decimals;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+    }
 
     async function loadUserData() {
+      loadingIndicator.classList.remove('d-none'); // Show loading indicator
+      filesContainer.innerHTML = ''; // Clear existing files (except indicator)
+      filesContainer.appendChild(loadingIndicator); // Re-add indicator if cleared
+
       let res, data;
       try {
         res = await fetch('/files', {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         data = await res.json();
+
+        if (!res.ok) {
+            throw new Error(data.error || `Server error: ${res.status}`);
+        }
+
       } catch (err) {
-        console.error('Network or parse error', err);
-        alert('Could not reach server or parse response.');
+        console.error('Error loading files:', err);
+        displayMessage(globalError, `Failed to load files: ${err.message}`);
+        loadingIndicator.classList.add('d-none'); // Hide indicator on error
         return;
+      } finally {
+         // Ensure indicator is hidden unless loading continues
+        if (filesContainer.contains(loadingIndicator)){
+             loadingIndicator.classList.add('d-none');
+        }
       }
 
-      if (res.status !== 200) {
-        console.error('Server error response:', data);
-        alert(data.error || `Server error: ${res.status}`);
-        return;
-      }
 
       const usedMB = data.storage_used / (1024 * 1024);
-      document.getElementById('used').innerText = usedMB.toFixed(2);
-      const pct = (usedMB / 300) * 100;
-      const bar = document.getElementById('progressBar');
-      bar.style.width = pct + '%';
-      bar.innerText = `${usedMB.toFixed(2)} MB`;
+      const totalMB = 300;
+      usedSpan.innerText = usedMB.toFixed(2);
 
-      const container = document.getElementById('filesContainer');
-      container.innerHTML = '';
-      data.files.forEach(f => {
-        const col = document.createElement('div');
-        col.className = 'col-md-6 col-lg-4';
-        col.innerHTML = `
-          <div class="card h-100 shadow-sm">
-            <div class="card-body d-flex flex-column">
-              <h6 class="card-title text-truncate">${f.name}</h6>
-              <a href="${f.url}" class="btn btn-sm btn-success mb-2" download>
-                Download
-              </a>
-            </div>
-          </div>`;
-        container.append(col);
+      const pct = totalMB > 0 ? (usedMB / totalMB) * 100 : 0;
+      storageProgressBar.style.width = pct + '%';
+      storageProgressBar.innerText = `${pct.toFixed(0)}%`;
+      storageProgressBar.setAttribute('aria-valuenow', usedMB.toFixed(2));
+
+
+      filesContainer.innerHTML = ''; // Clear container before adding files
+      if (data.files && data.files.length > 0) {
+          data.files.forEach(f => {
+            const col = document.createElement('div');
+            col.className = 'col-md-6 col-lg-4';
+            col.id = `file-card-${f.id}`; // Add unique ID for removal
+            col.innerHTML = `
+              <div class="card h-100 shadow-sm">
+                <div class="card-body d-flex flex-column">
+                  <h6 class="card-title text-truncate" title="${f.name}">${f.name}</h6>
+                  <p class="card-text text-muted small">${formatBytes(f.size)}</p>
+                  <div class="mt-auto card-buttons">
+                     <a href="${f.url}" class="btn btn-sm btn-success" download title="Download">
+                         <i class="fas fa-download"></i> Download
+                     </a>
+                     <button class="btn btn-sm btn-info share-btn" title="Copy Share Link" onclick="copyShareLink('${f.share_url}', this)">
+                         <i class="fas fa-share-alt"></i> Share
+                     </button>
+                     <span class="copy-feedback">Copied!</span>
+                      <button class="btn btn-sm btn-danger delete-btn" title="Delete File" onclick="deleteFile('${f.id}', '${f.name}')">
+                         <i class="fas fa-trash-alt"></i> Delete
+                     </button>
+                  </div>
+                </div>
+              </div>`;
+            filesContainer.appendChild(col); // Use appendChild for better performance
+          });
+      } else {
+           filesContainer.innerHTML = '<p class="text-center text-muted col-12">You haven\'t uploaded any files yet.</p>';
+      }
+    }
+
+    window.copyShareLink = (shareUrl, buttonElement) => {
+      navigator.clipboard.writeText(shareUrl).then(() => {
+        // Provide feedback
+        const feedback = buttonElement.nextElementSibling; // Get the 'Copied!' span
+        feedback.style.display = 'inline';
+        buttonElement.disabled = true; // Briefly disable button
+        setTimeout(() => {
+          feedback.style.display = 'none';
+          buttonElement.disabled = false;
+        }, 2000); // Hide feedback after 2 seconds
+      }).catch(err => {
+        console.error('Failed to copy share link: ', err);
+        alert('Failed to copy link. Please try again or copy manually.');
       });
     }
 
-    document.getElementById('uploadForm').addEventListener('submit', async e => {
-      e.preventDefault();
-      const fileInput = document.getElementById('fileInput');
-      if (!fileInput.files.length) {
-        alert('Please select a file.');
-        return;
+    window.deleteFile = async (fileId, fileName) => {
+      if (!confirm(`Are you sure you want to delete the file "${fileName}"? This cannot be undone.`)) {
+        return; // Abort if user cancels
       }
 
-      const form = new FormData();
-      form.append('file', fileInput.files[0]);
+      // Optional: Disable button visually during request
+      const card = document.getElementById(`file-card-${fileId}`);
+      const deleteButton = card ? card.querySelector('.delete-btn') : null;
+      if (deleteButton) deleteButton.disabled = true;
 
-      let res, data;
+
+      let res;
       try {
-        res = await fetch('/upload', {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}` },
-          body: form
+        res = await fetch(`/delete/${fileId}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}` }
         });
-        data = await res.json();
+
+        const data = await res.json(); // Try to parse JSON regardless of status
+
+        if (!res.ok) {
+             throw new Error(data.error || `Server error: ${res.status}`);
+        }
+
+        displayMessage(globalSuccess, data.message || 'File deleted successfully.', false);
+
+        // Remove the file card from the UI immediately
+        if (card) {
+            card.remove();
+        }
+        // Reload user data to update storage info (could also update locally)
+        loadUserData();
+
       } catch (err) {
-        console.error('Upload network or parse error', err);
-        alert('Could not reach server or parse response.');
-        return;
+        console.error('Error deleting file:', err);
+        displayMessage(globalError, `Failed to delete file: ${err.message}`);
+         // Re-enable button on error
+        if (deleteButton) deleteButton.disabled = false;
       }
+    }
 
-      if (res.status !== 200) {
-        console.error('Server upload error:', data);
-        alert(data.error || `Upload failed: ${res.status}`);
-        return;
-      }
 
-      alert('File uploaded!');
-      loadUserData();
+    uploadForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!fileInput.files.length) {
+            displayMessage(globalError, 'Please select a file.');
+            return;
+        }
+
+        const file = fileInput.files[0];
+        const formData = new FormData();
+        formData.append('file', file);
+
+        // Disable button and show spinner
+        uploadButton.disabled = true;
+        uploadSpinner.classList.remove('d-none');
+        uploadProgress.classList.remove('d-none'); // Show progress bar container
+        uploadProgressBar.style.width = '0%'; // Reset progress bar
+        uploadProgressBar.textContent = '0%';
+
+
+        // --- Using XMLHttpRequest for Progress ---
+        const xhr = new XMLHttpRequest();
+
+        xhr.upload.addEventListener("progress", (event) => {
+            if (event.lengthComputable) {
+                const percentComplete = Math.round((event.loaded / event.total) * 100);
+                uploadProgressBar.style.width = percentComplete + '%';
+                uploadProgressBar.textContent = percentComplete + '%';
+            }
+        }, false);
+
+        xhr.addEventListener("load", () => { // 'load' means finished, success or error
+            uploadButton.disabled = false;
+            uploadSpinner.classList.add('d-none');
+            uploadProgress.classList.add('d-none'); // Hide progress bar container
+            fileInput.value = ''; // Reset file input
+
+            try {
+                 const data = JSON.parse(xhr.responseText);
+                 if (xhr.status >= 200 && xhr.status < 300) { // Success range
+                    displayMessage(globalSuccess, data.message || 'File uploaded successfully!', false);
+                    loadUserData(); // Refresh file list and storage info
+                 } else {
+                    throw new Error(data.error || `Upload failed with status: ${xhr.status}`);
+                 }
+            } catch (parseError) { // Handle non-JSON response or JSON parsing error
+                 console.error("Error parsing upload response or non-JSON response:", xhr.responseText, parseError);
+                 displayMessage(globalError, `Upload failed. Server returned status ${xhr.status}.`);
+            }
+        });
+
+        xhr.addEventListener("error", () => {
+            console.error("Upload failed (network error)");
+            displayMessage(globalError, 'Upload failed due to a network error. Please try again.');
+            uploadButton.disabled = false;
+            uploadSpinner.classList.add('d-none');
+            uploadProgress.classList.add('d-none');
+             fileInput.value = ''; // Reset file input
+        });
+
+        xhr.open("POST", "/upload", true);
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        // Note: Do NOT set Content-Type when using FormData with XHR,
+        // the browser sets it correctly including the boundary.
+        xhr.send(formData);
     });
+
 
     function logout() {
       localStorage.removeItem('firebase_token');
       window.location.href = '/login';
     }
 
+    // Initial load
     loadUserData();
   </script>
 
