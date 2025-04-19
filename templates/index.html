@@ -1,79 +1,57 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Simple File Manager</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-  <style>
-    body { padding: 2rem; }
-    .file-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin-top: 8px;
-    }
-    .file-item {
-      padding: 1rem;
-      margin-bottom: 1rem;
-      border: 1px solid #dee2e6;
-      border-radius: 8px;
-    }
-    .file-name {
-      word-break: break-word;
-    }
-    @media (max-width: 576px) {
-      body { padding: 1rem; }
-      .form-control, .btn {
-        font-size: 14px;
-      }
-    }
-  </style>
+    <title>File Manager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
-<body>
-  <div class="container">
-    <h2 class="mb-4 text-center">📂 Simple File Manager</h2>
+<body class="bg-light">
 
-    <form action="/upload" method="post" enctype="multipart/form-data" class="mb-4">
-      <div class="input-group">
-        <input type="file" name="file" class="form-control" required>
-        <button type="submit" class="btn btn-primary">Upload</button>
-      </div>
+<div class="container py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap">
+        <h3>Welcome, {{ email }}</h3>
+        <a href="/logout" class="btn btn-danger">Logout</a>
+    </div>
+
+    <form method="post" action="/upload" enctype="multipart/form-data" class="mb-4">
+        <div class="input-group">
+            <input type="file" name="file" class="form-control">
+            <button type="submit" class="btn btn-primary">Upload</button>
+        </div>
     </form>
 
-    {% if files %}
-      <h5 class="mb-3">Uploaded Files</h5>
-      <div class="row">
-        {% for file in files %}
-        <div class="col-md-6 col-12">
-          <div class="file-item">
-            <div class="file-name fw-semibold">{{ file }}</div>
-
-            <form action="/rename/{{ file }}" method="post" class="d-flex mt-2">
-              <input type="text" name="new_name" class="form-control form-control-sm" placeholder="Rename to..." required>
-              <button class="btn btn-warning btn-sm ms-1">Rename</button>
-            </form>
-
-            <div class="file-actions mt-2">
-              <a href="{{ url_for('serve_file', filename=file) }}" class="btn btn-success btn-sm" download>Download</a>
-              <button class="btn btn-info btn-sm" onclick="copyLink('{{ url_for('serve_file', filename=file, _external=True) }}')">Copy Link</button>
-              <a href="/delete/{{ file }}" class="btn btn-danger btn-sm">Delete</a>
+    <div class="mb-3">
+        <strong>Used:</strong> {{ used }} MB / 300 MB
+        <div class="progress">
+            <div class="progress-bar" role="progressbar" style="width: {{ used / 300 * 100 }}%;" aria-valuenow="{{ used }}" aria-valuemin="0" aria-valuemax="300">
+                {{ used }} MB
             </div>
-          </div>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        {% for file in files %}
+        <div class="col-md-6 col-lg-4">
+            <div class="card h-100 shadow-sm">
+                <div class="card-body d-flex flex-column">
+                    <h6 class="card-title text-truncate">{{ file }}</h6>
+                    <a href="/download/{{ email }}/{{ file }}" class="btn btn-sm btn-success mb-2" download>Download</a>
+                    <button class="btn btn-sm btn-outline-secondary mb-2" onclick="copyLink('{{ file }}')">Copy Share Link</button>
+                    <a href="/delete/{{ file }}" class="btn btn-sm btn-danger">Delete</a>
+                </div>
+            </div>
         </div>
         {% endfor %}
-      </div>
-    {% else %}
-      <p>No files uploaded yet.</p>
-    {% endif %}
-  </div>
+    </div>
+</div>
 
-  <script>
-    function copyLink(link) {
-      navigator.clipboard.writeText(link).then(() => {
-        alert("✅ Download link copied to clipboard!");
-      });
+<script>
+    function copyLink(filename) {
+        const link = `${window.location.origin}/download/{{ email }}/${filename}`;
+        navigator.clipboard.writeText(link).then(() => {
+            alert("Link copied to clipboard!");
+        });
     }
-  </script>
+</script>
+
 </body>
 </html>

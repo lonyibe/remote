@@ -1,91 +1,101 @@
-from flask import Flask, render_template, request, redirect, url_for, send_from_directory, flash, session
-import os
+from flask import Flask, render_template, request, redirect, url_for, send_from_directory, session, jsonify
 from werkzeug.utils import secure_filename
+import os
+from flask_cors import CORS
+from functools import wraps
 
 app = Flask(__name__)
-app.secret_key = 'your_secret_key_here'
+app.secret_key = 'supersecretkey'
+CORS(app)
 
 UPLOAD_FOLDER = 'uploads'
+MAX_STORAGE_MB = 300
+
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
-users = {}  # Simple in-memory user store
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# Check login
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if 'user_email' not in session:
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated
+
+def get_user_folder():
+    return os.path.join(app.config['UPLOAD_FOLDER'], session['user_email'])
+
+def get_storage_usage_mb():
+    total_size = 0
+    user_folder = get_user_folder()
+    if os.path.exists(user_folder):
+        for f in os.listdir(user_folder):
+            fp = os.path.join(user_folder, f)
+            if os.path.isfile(fp):
+                total_size += os.path.getsize(fp)
+    return round(total_size / (1024 * 1024), 2)
 
 @app.route('/')
-def home():
-    if 'username' in session:
-        files = os.listdir(UPLOAD_FOLDER)
-        return render_template('index.html', files=files)
-    return redirect(url_for('login'))
+@login_required
+def index():
+    user_folder = get_user_folder()
+    if not os.path.exists(user_folder):
+        os.makedirs(user_folder)
+    files = os.listdir(user_folder)
+    used = get_storage_usage_mb()
+    remaining = MAX_STORAGE_MB - used
+    return render_template('index.html', files=files, used=used, remaining=remaining, email=session['user_email'])
 
-@app.route('/login', methods=['GET', 'POST'])
+@app.route('/upload', methods=['POST'])
+@login_required
+def upload():
+    if 'file' not in request.files:
+        return redirect('/')
+    file = request.files['file']
+    if file.filename == '':
+        return redirect('/')
+    filename = secure_filename(file.filename)
+    user_folder = get_user_folder()
+
+    if not os.path.exists(user_folder):
+        os.makedirs(user_folder)
+
+    # Check size limit
+    if get_storage_usage_mb() + (len(file.read()) / (1024 * 1024)) > MAX_STORAGE_MB:
+        return 'Storage limit exceeded!', 403
+    file.seek(0)  # Reset after read
+    file.save(os.path.join(user_folder, filename))
+    return redirect('/')
+
+@app.route('/delete/<filename>')
+@login_required
+def delete(filename):
+    file_path = os.path.join(get_user_folder(), filename)
+    if os.path.exists(file_path):
+        os.remove(file_path)
+    return redirect('/')
+
+@app.route('/download/<email>/<filename>')
+def download(email, filename):
+    return send_from_directory(os.path.join(UPLOAD_FOLDER, email), filename, as_attachment=True)
+
+@app.route('/login')
 def login():
-    if request.method == 'POST':
-        uname = request.form['username']
-        pwd = request.form['password']
-        if uname in users and users[uname] == pwd:
-            session['username'] = uname
-            return redirect(url_for('home'))
-        flash("Invalid credentials", "danger")
     return render_template('login.html')
 
-@app.route('/signup', methods=['GET', 'POST'])
-def signup():
-    if request.method == 'POST':
-        uname = request.form['username']
-        pwd = request.form['password']
-        if uname in users:
-            flash("User already exists", "danger")
-        else:
-            users[uname] = pwd
-            flash("Signup successful. Please log in.", "success")
-            return redirect(url_for('login'))
-    return render_template('signup.html')
+@app.route('/setuser', methods=['POST'])
+def setuser():
+    data = request.get_json()
+    session['user_email'] = data['email']
+    return jsonify({'status': 'ok'})
 
 @app.route('/logout')
 def logout():
-    session.pop('username', None)
-    return redirect(url_for('login'))
-
-@app.route('/upload', methods=['POST'])
-def upload():
-    if 'username' not in session:
-        return redirect(url_for('login'))
-
-    if 'file' not in request.files:
-        return redirect(url_for('home'))
-    file = request.files['file']
-    if file.filename == '':
-        return redirect(url_for('home'))
-    filename = secure_filename(file.filename)
-    file.save(os.path.join(UPLOAD_FOLDER, filename))
-    return redirect(url_for('home'))
-
-@app.route('/delete/<filename>')
-def delete(filename):
-    if 'username' not in session:
-        return redirect(url_for('login'))
-
-    file_path = os.path.join(UPLOAD_FOLDER, filename)
-    if os.path.exists(file_path):
-        os.remove(file_path)
-    return redirect(url_for('home'))
-
-@app.route('/rename/<filename>', methods=['POST'])
-def rename(filename):
-    if 'username' not in session:
-        return redirect(url_for('login'))
-
-    new_name = secure_filename(request.form['new_name'])
-    old_path = os.path.join(UPLOAD_FOLDER, filename)
-    new_path = os.path.join(UPLOAD_FOLDER, new_name)
-    if os.path.exists(old_path):
-        os.rename(old_path, new_path)
-    return redirect(url_for('home'))
-
-@app.route('/uploads/<filename>')
-def serve_file(filename):
-    return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
+    session.pop('user_email', None)
+    return redirect('/login')
 
 # Run the app
 if __name__ == "__main__":
