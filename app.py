@@ -1,130 +1,109 @@
 import os
-import io
-import base64
-import requests
-from flask import Flask, render_template, request, redirect, session, url_for, jsonify
-from werkzeug.utils import secure_filename
+import json
+from flask import Flask, request, jsonify
 import firebase_admin
-from firebase_admin import credentials, auth, db
-from functools import wraps
+from firebase_admin import credentials, firestore, storage
 from dotenv import load_dotenv
+import requests
+import base64
+import imghdr
+from werkzeug.utils import secure_filename
 
+# Load environment variables from .env file
 load_dotenv()
 
+# Initialize Flask app
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
 
-# Firebase Setup
-cred = credentials.Certificate("firebase-admin.json")
+# Initialize Firebase Admin with JSON loaded from environment variable
+firebase_creds_json = os.getenv("FIREBASE_CREDENTIALS")
+if not firebase_creds_json:
+    raise ValueError("Missing FIREBASE_CREDENTIALS environment variable.")
+
+firebase_creds_dict = json.loads(firebase_creds_json)
+cred = credentials.Certificate(firebase_creds_dict)
 firebase_admin.initialize_app(cred, {
-    'databaseURL': os.environ.get("FIREBASE_DB_URL")
+    'storageBucket': os.getenv("FIREBASE_STORAGE_BUCKET")
 })
 
-IMGUR_CLIENT_ID = os.environ.get("IMGUR_CLIENT_ID")
-MAX_STORAGE_BYTES = 300 * 1024 * 1024  # 300MB
+# Firebase Firestore client
+db = firestore.client()
 
-# Auth Decorator
-def login_required(f):
-    @wraps(f)
-    def wrapped(*args, **kwargs):
-        if "user" not in session:
-            return redirect(url_for("login"))
-        return f(*args, **kwargs)
-    return wrapped
+# Firebase Storage client
+bucket = storage.bucket()
 
-@app.route("/")
-@login_required
-def index():
-    user_email = session["user"]
-    ref = db.reference(f"users/{user_email.replace('.', '_')}/files")
-    files = ref.get() or {}
+# Imgur API credentials
+IMGUR_CLIENT_ID = os.getenv("IMGUR_CLIENT_ID")
 
-    total_size = sum(file['size'] for file in files.values())
-    remaining = MAX_STORAGE_BYTES - total_size
+# Max file size for uploads (5MB)
+MAX_CONTENT_LENGTH = 5 * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 
-    return render_template("index.html", files=files, used=total_size, remaining=remaining)
+# Function to upload images to Imgur
+def upload_to_imgur(file_path):
+    headers = {'Authorization': f'Client-ID {IMGUR_CLIENT_ID}'}
+    with open(file_path, 'rb') as file:
+        img_data = file.read()
+    url = 'https://api.imgur.com/3/image'
+    response = requests.post(url, headers=headers, files={'image': img_data})
+    if response.status_code == 200:
+        return response.json()['data']['link']
+    else:
+        return None
 
-@app.route("/upload", methods=["POST"])
-@login_required
-def upload():
-    file = request.files["file"]
-    if not file:
-        return "No file selected", 400
+# Upload file to Firebase Storage
+def upload_to_firebase(file):
+    blob = bucket.blob(secure_filename(file.filename))
+    blob.upload_from_file(file)
+    blob.make_public()
+    return blob.public_url
 
-    filename = secure_filename(file.filename)
-    file_bytes = file.read()
+# Route for uploading files
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    file = request.files.get('file')
+    if file:
+        file_ext = imghdr.what(file)
+        if not file_ext:
+            return jsonify({"error": "Invalid file format. Only image files are supported."}), 400
+        
+        file_path = f"./uploads/{secure_filename(file.filename)}"
+        file.save(file_path)
 
-    # Size Check
-    user_email = session["user"]
-    ref = db.reference(f"users/{user_email.replace('.', '_')}/files")
-    files = ref.get() or {}
-    total_size = sum(f["size"] for f in files.values())
+        # Upload the file to Firebase Storage or Imgur based on your choice
+        upload_choice = request.form.get("upload_choice", "firebase")
+        if upload_choice == "imgur":
+            imgur_url = upload_to_imgur(file_path)
+            if imgur_url:
+                return jsonify({"message": "File uploaded to Imgur successfully!", "url": imgur_url})
+            else:
+                return jsonify({"error": "Failed to upload to Imgur."}), 500
+        else:
+            firebase_url = upload_to_firebase(file)
+            return jsonify({"message": "File uploaded to Firebase Storage successfully!", "url": firebase_url})
 
-    if total_size + len(file_bytes) > MAX_STORAGE_BYTES:
-        return "Upload exceeds 300MB quota.", 403
+    return jsonify({"error": "No file uploaded."}), 400
 
-    # Upload to Imgur
-    imgur_response = requests.post(
-        "https://api.imgur.com/3/upload",
-        headers={"Authorization": f"Client-ID {IMGUR_CLIENT_ID}"},
-        data={
-            "image": base64.b64encode(file_bytes),
-            "type": "base64",
-            "name": filename,
-            "title": filename
-        }
-    )
+# Route for getting uploaded files (List from Firebase Firestore)
+@app.route('/files', methods=['GET'])
+def list_files():
+    files_ref = db.collection('files')
+    files = files_ref.stream()
+    file_urls = []
+    for file in files:
+        file_urls.append(file.to_dict())
+    return jsonify(file_urls)
 
-    imgur_data = imgur_response.json()
-    if not imgur_data.get("success"):
-        return "Imgur upload failed", 500
-
-    file_url = imgur_data["data"]["link"]
-    ref.child(filename).set({
-        "name": filename,
-        "url": file_url,
-        "size": len(file_bytes)
-    })
-
-    return redirect(url_for("index"))
-
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        email = request.form["email"]
-        password = request.form["password"]
-        try:
-            user = auth.get_user_by_email(email)
-            session["user"] = email
-            return redirect(url_for("index"))
-        except Exception as e:
-            return render_template("login.html", error="Login failed")
-    return render_template("login.html")
-
-@app.route("/signup", methods=["GET", "POST"])
-def signup():
-    if request.method == "POST":
-        email = request.form["email"]
-        password = request.form["password"]
-        try:
-            auth.create_user(email=email, password=password)
-            return redirect(url_for("login"))
-        except Exception as e:
-            return render_template("signup.html", error="Signup failed")
-    return render_template("signup.html")
-
-@app.route("/logout")
-def logout():
-    session.pop("user", None)
-    return redirect(url_for("login"))
-
-@app.route("/delete/<filename>", methods=["POST"])
-@login_required
-def delete_file(filename):
-    user_email = session["user"]
-    ref = db.reference(f"users/{user_email.replace('.', '_')}/files/{filename}")
-    ref.delete()
-    return redirect(url_for("index"))
+# Route for deleting uploaded files from Firebase Storage
+@app.route('/delete', methods=['POST'])
+def delete_file():
+    file_url = request.json.get("url")
+    if file_url:
+        file_name = file_url.split('/')[-1]
+        blob = bucket.blob(file_name)
+        blob.delete()
+        return jsonify({"message": "File deleted successfully."}), 200
+    return jsonify({"error": "No file URL provided."}), 400
 
 # Run the app
 if __name__ == "__main__":
