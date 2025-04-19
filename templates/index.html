@@ -8,48 +8,38 @@
     href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
     rel="stylesheet"
   />
+  <style>
+    .card-body .btn { margin-right: 5px; } /* Add some space between buttons */
+  </style>
 </head>
 <body class="bg-light">
 
   <div class="container py-4">
-    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap">
-      <h3>File Manager</h3>
-      <button class="btn btn-danger" onclick="logout()">Logout</button>
-    </div>
-
-    <form id="uploadForm" enctype="multipart/form-data" class="mb-4">
-      <div class="input-group">
-        <input
-          type="file"
-          id="fileInput"
-          name="file"
-          class="form-control"
-        />
-        <button type="submit" class="btn btn-primary">Upload</button>
-      </div>
-    </form>
-
-    <div class="mb-3">
-      <strong>Used:</strong>
-      <span id="used">0.00</span> MB / 300 MB
-      <div class="progress mt-2">
-        <div
-          id="progressBar"
-          class="progress-bar"
-          role="progressbar"
-          style="width: 0%;"
-          aria-valuemin="0"
-          aria-valuemax="300"
-        >0 MB</div>
-      </div>
-    </div>
-
     <div id="filesContainer" class="row g-3"></div>
   </div>
 
   <script>
     const token = localStorage.getItem('firebase_token');
     if (!token) window.location.href = '/login';
+
+    // Function to copy text to clipboard
+    async function copyToClipboard(text, buttonElement) {
+      try {
+        await navigator.clipboard.writeText(text);
+        // Provide user feedback (optional)
+        const originalText = buttonElement.innerText;
+        buttonElement.innerText = 'Copied!';
+        buttonElement.disabled = true; // Briefly disable button
+        setTimeout(() => {
+          buttonElement.innerText = originalText;
+          buttonElement.disabled = false;
+        }, 1500); // Reset after 1.5 seconds
+      } catch (err) {
+        console.error('Failed to copy text: ', err);
+        alert('Failed to copy link.'); // Fallback feedback
+      }
+    }
+
 
     async function loadUserData() {
       let res, data;
@@ -65,32 +55,73 @@
       }
 
       if (res.status !== 200) {
-        console.error('Server error response:', data);
-        alert(data.error || `Server error: ${res.status}`);
+        // Check if the response is JSON before trying to parse it
+        const contentType = res.headers.get("content-type");
+        let errorMsg = `Server error: ${res.status}`;
+        if (contentType && contentType.indexOf("application/json") !== -1) {
+             try {
+                 const errorData = await res.json();
+                 errorMsg = errorData.error || errorMsg;
+             } catch (parseErr) {
+                 console.error('Failed to parse error response:', parseErr);
+             }
+        } else {
+             // Handle non-JSON error responses if necessary
+             errorMsg = await res.text(); // Get raw text error
+             console.error('Non-JSON server error response:', errorMsg);
+        }
+        alert(errorMsg);
         return;
       }
 
-      const usedMB = data.storage_used / (1024 * 1024);
+
+      const usedMB = (data.storage_used || 0) / (1024 * 1024); // Default to 0 if undefined
       document.getElementById('used').innerText = usedMB.toFixed(2);
       const pct = (usedMB / 300) * 100;
       const bar = document.getElementById('progressBar');
       bar.style.width = pct + '%';
+      bar.setAttribute('aria-valuenow', usedMB.toFixed(2)); // Update aria value
       bar.innerText = `${usedMB.toFixed(2)} MB`;
 
       const container = document.getElementById('filesContainer');
-      container.innerHTML = '';
+      container.innerHTML = ''; // Clear previous files
+
+      // Ensure data.files is an array before iterating
+      if (!Array.isArray(data.files)) {
+          console.error("Received invalid file data:", data.files);
+          return; // Stop if files data is not an array
+      }
+
+
       data.files.forEach(f => {
+        // Ensure we have the necessary file data
+        if (!f || !f.name || !f.url || !f.share_url) {
+            console.warn("Skipping file with missing data:", f);
+            return; // Skip this file if essential data is missing
+        }
+
         const col = document.createElement('div');
         col.className = 'col-md-6 col-lg-4';
+
+        // --- MODIFICATION START ---
+        // Added share button and onclick handler
+        // Escaping share_url for safety in the HTML attribute
+        const escapedShareUrl = f.share_url.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
         col.innerHTML = `
           <div class="card h-100 shadow-sm">
             <div class="card-body d-flex flex-column">
-              <h6 class="card-title text-truncate">${f.name}</h6>
-              <a href="${f.url}" class="btn btn-sm btn-success mb-2" download>
-                Download
-              </a>
+              <h6 class="card-title text-truncate" title="${f.name}">${f.name}</h6>
+              <div class="mt-auto"> <a href="${f.url}" class="btn btn-sm btn-success mb-2" download>
+                  Download
+                </a>
+                <button class="btn btn-sm btn-secondary mb-2" onclick="copyToClipboard('${escapedShareUrl}', this)">
+                  Share
+                </button>
+              </div>
             </div>
           </div>`;
+        // --- MODIFICATION END ---
         container.append(col);
       });
     }
@@ -106,6 +137,13 @@
       const form = new FormData();
       form.append('file', fileInput.files[0]);
 
+      // Add a loading indicator during upload (optional)
+      const submitButton = e.target.querySelector('button[type="submit"]');
+      const originalButtonText = submitButton.innerText;
+      submitButton.innerText = 'Uploading...';
+      submitButton.disabled = true;
+
+
       let res, data;
       try {
         res = await fetch('/upload', {
@@ -113,21 +151,40 @@
           headers: { 'Authorization': `Bearer ${token}` },
           body: form
         });
-        data = await res.json();
+         // Check content type before parsing JSON
+         const contentType = res.headers.get("content-type");
+         if (contentType && contentType.indexOf("application/json") !== -1) {
+             data = await res.json();
+         } else {
+             // Handle non-JSON responses appropriately
+             const textResponse = await res.text();
+             throw new Error(`Received non-JSON response: ${res.status} - ${textResponse}`);
+         }
       } catch (err) {
         console.error('Upload network or parse error', err);
-        alert('Could not reach server or parse response.');
+        alert(`Upload failed: ${err.message}`);
+        // Restore button text/state on error
+        submitButton.innerText = originalButtonText;
+        submitButton.disabled = false;
         return;
+      } finally {
+         // Ensure button text/state is restored even if fetch fails before response check
+         if (submitButton.disabled) {
+             submitButton.innerText = originalButtonText;
+             submitButton.disabled = false;
+         }
       }
+
 
       if (res.status !== 200) {
         console.error('Server upload error:', data);
-        alert(data.error || `Upload failed: ${res.status}`);
+        alert(data?.error || `Upload failed: ${res.status}`); // Use optional chaining for data.error
         return;
       }
 
       alert('File uploaded!');
-      loadUserData();
+      fileInput.value = ''; // Clear the file input
+      loadUserData(); // Refresh the file list
     });
 
     function logout() {
@@ -135,6 +192,7 @@
       window.location.href = '/login';
     }
 
+    // Initial load
     loadUserData();
   </script>
 
