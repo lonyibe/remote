@@ -65,7 +65,7 @@ def get_user_files():
         raw = db.reference(f"users/{uid}/files").get() or {}
 
         files = [
-            { "name": f["name"], "url": f["url"], "size": f["size"] }
+            {"name": f["name"], "url": f["url"], "size": f["size"]}
             for f in raw.values()
         ]
         return jsonify(
@@ -108,14 +108,14 @@ def upload_file():
             return jsonify(error="Storage limit exceeded"), 400
 
         download_url = url_for("download_file", filename=saved_name, _external=True)
-        share_url    = url_for("share_file", file_id=saved_name, _external=True)
+        share_url    = url_for("share_file",   file_id=saved_name,  _external=True)
         meta = {
-            "id": file_id,
-            "name": filename,
-            "size": size,
-            "url": download_url,
-            "share_url": share_url,
-            "uploaded_at": datetime.datetime.utcnow().isoformat()
+            "id":           file_id,
+            "name":         filename,
+            "size":         size,
+            "url":          download_url,
+            "share_url":    share_url,
+            "uploaded_at":  datetime.datetime.utcnow().isoformat()
         }
         db.reference(f"users/{uid}/files/{file_id}").set(meta)
 
