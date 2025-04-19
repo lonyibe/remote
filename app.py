@@ -13,11 +13,11 @@ from firebase_admin import credentials, auth, db, exceptions as fb_exceptions
 
 app = Flask(__name__)
 
-# 300 MB upload limit
-app.config['UPLOAD_FOLDER']      = 'uploads'
+# 300 MB upload limit
+app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 300 * 1024 * 1024
 
-# Initialize Firebase Admin from JSON in env var
+# Load Firebase credentials from environment variable (JSON string)
 firebase_key_json = json.loads(os.environ["FIREBASE_KEY"])
 cred = credentials.Certificate(firebase_key_json)
 firebase_admin.initialize_app(cred, {
@@ -27,7 +27,7 @@ firebase_admin.initialize_app(cred, {
 # Ensure upload folder exists
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-
+# Helper: Calculate user's used storage
 def get_user_storage_used(uid):
     ref = db.reference(f"users/{uid}/files")
     try:
@@ -66,7 +66,6 @@ def get_user_files():
         used = get_user_storage_used(uid)
         remaining = (300 * 1024 * 1024) - used
 
-        # Safely fetch file list
         ref = db.reference(f"users/{uid}/files")
         try:
             raw = ref.get() or {}
@@ -118,17 +117,17 @@ def upload_file():
             return jsonify(error="Storage limit exceeded"), 400
 
         download_url = url_for("download_file", filename=saved_name, _external=True)
-        share_url    = url_for("share_file",   file_id=saved_name,  _external=True)
+        share_url = url_for("share_file", file_id=saved_name, _external=True)
         meta = {
-            "id":           file_id,
-            "name":         filename,
-            "size":         size,
-            "url":          download_url,
-            "share_url":    share_url,
-            "uploaded_at":  datetime.datetime.utcnow().isoformat()
+            "id": file_id,
+            "name": filename,
+            "size": size,
+            "url": download_url,
+            "share_url": share_url,
+            "uploaded_at": datetime.datetime.utcnow().isoformat()
         }
 
-        # Write metadata (path will be created if missing)
+        # Write metadata to Firebase Realtime DB
         db.reference(f"users/{uid}/files/{file_id}").set(meta)
 
         return jsonify(message="File uploaded", file=meta), 200
@@ -152,5 +151,6 @@ def share_file(file_id):
     return redirect(url_for("download_file", filename=file_id))
 
 
+# Run the app
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
